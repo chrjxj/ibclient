@@ -1,0 +1,16 @@
+host: localhost
+port: 7497
+client_id: 666
+
+account: FILL-YOUR-IB-ACCOUNT
+starting_cash: 120000
+
+stock_symbol_01: MSFT
+stock_symbol_02: DIN
+
+future:
+  symbol: XINA50
+  exchange: SGX
+  expiry: 20200528
+  tradingClass: CN
+

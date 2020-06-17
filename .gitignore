@@ -1,0 +1,27 @@
+# Compiler/Interpreter Output #
+###############################
+*.py[cod]
+__pycache__/
+
+# Folders #
+###########
+_build/
+build/
+dist/
+local/
+*.egg-info/
+.idea/
+
+# Junk #
+########
+.DS_Store*
+.*.swp
+*.swp
+
+# Installation Files #
+######################
+files.txt
+*.rar
+
+tests/test-acc-jin.yaml
+demo/

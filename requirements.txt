@@ -1,0 +1,4 @@
+pandas
+IbPy2==0.8.0
+lxml>=3.8
+pyyaml

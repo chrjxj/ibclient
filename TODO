@@ -1,0 +1,8 @@
+TODO
+=========
+
+2/26/2017 9:32:10 PM
+1) To run test again, especially fund_test.py; to re run demo scripts again
+2) To add configuration file support for the TWS connection, e.g. IP, port and etc
+3) To improve exceptions/error handling and soft recovering
+4) To add logging feature instead of dumping msg to console
