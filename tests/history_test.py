@@ -9,9 +9,9 @@ import time
 from pprint import pprint
 import unittest
 import datetime
+import random
 
-from ibclient import IBClient
-from ibclient.contract import new_stock_contract, new_futures_contract
+from ibclient import IBClient, new_stock_contract, new_futures_contract
 
 sys.path.insert(0, path.abspath(path.join(path.dirname(__file__), '..')))
 from tests.config import load_config
@@ -19,38 +19,36 @@ from tests.config import load_config
 
 class Test(unittest.TestCase):
 
-    def set_data(self):
+    def setUp(self):
         self.config = load_config('test-acc.yaml')
         pprint(self.config)
+        _stock_config = self.config['stock']
+        self.stock = new_stock_contract(_stock_config['symbol'],
+                                        exchange = _stock_config['exchange'],
+                                        currency=_stock_config['currency'])
 
-        self.stock = new_stock_contract(self.config.get('stock_symbol_01', 'IBM'))
-        self.stock_str = self.config.get('stock_symbol_02', 'DIN')
-
-        self.future = new_futures_contract(self.config['symbol'],
-                                           self.config['exchange'],
+        self.future = new_futures_contract(self.config['future']['symbol'],
+                                           self.config['future']['exchange'],
                                            False,
-                                           expiry=str(self.config['expiry']),
-                                           tradingClass=self.config['tradingClass'])
+                                           expiry=str(self.config['future']['expiry']),
+                                           tradingClass=self.config['future']['tradingClass'])
         self.end = datetime.datetime.now().strftime('%Y%m%d %H:%M:%S')
 
-    def set_conn(self):
         self.con = IBClient(port=self.config['port'],
-                            client_id=self.config['client_id'])
+                            client_id=random.randint(1, 10000))
         self.con.connect()
-        return self.con
+
+    def tearDown(self):
+        self.con.disconnect()
 
     def test01_get_hist_data(self):
-        self.set_data()
 
         print(self.con.get_price_history(self.stock, self.end, '3 D', 'daily'))
-        print(self.con.get_price_history(self.stock_str, self.end, '10 D', 'minute'))
         print(self.con.get_price_history(self.future, self.end, '3 D', 'daily'))
-
         time.sleep(0.5)
 
     def test02_get_hist_data_long(self):
         print(self.con.get_price_history(self.stock, self.end, '3 M', 'daily'))
-        print(self.con.get_price_history(self.stock_str, self.end, '1 Y', 'daily'))
         self.con.close()
         time.sleep(0.5)
 

@@ -10,26 +10,35 @@ from __future__ import absolute_import
 from __future__ import print_function
 from __future__ import division
 
-import datetime as datetime
+from datetime import datetime
 from copy import copy
 import threading
 from threading import Event
 from time import sleep
 import pandas as pd
-from ib.ext.Order import Order
-from ib.ext.EClientSocket import EClientSocket
 
-from ibclient.msg_wrapper import IBMsgWrapper
-from ibclient.utils import (RequestDetails,
+from ib.ext.EClientSocket import EClientSocket
+#
+# from ibclient.msg_wrapper import IBMsgWrapper
+# from ibclient.utils import (RequestDetails,
+#                             ResponseDetails)
+#
+# from ibclient.parsers import (parse_ownership_report,
+#                               parse_analyst_estimates,
+#                               parse_fin_statements)
+
+from .msg_wrapper import IBMsgWrapper
+from .utils import (RequestDetails,
                     ResponseDetails)
 
-from ibclient.parsers import (parse_ownership_report,
+from .parsers import (parse_ownership_report,
                       parse_analyst_estimates,
                       parse_fin_statements)
-
-from .constants import IB_FARM_NAME_LS
-from .orders_style import *
+from .constants import IB_FARM_NAME_LS, MarketDepth
+from .orders import *
 from .contract import *
+from .account import Portfolio
+
 
 class IBClient(object):
     """IB Socket client"""
@@ -44,20 +53,22 @@ class IBClient(object):
             client_name: 本次连接的名字。可选
         """
 
-
         self.client_name = client_name
         self.host = host  # host IP address in a string; e.g. '127.0.0.1', 'localhost'
         self.port = port  # socket port;
         self.client_id = client_id  # socket client id
 
-        self.connected = False  # status of the socket connection
-
         self.tickerId = 0  # known as ticker ID or request ID
         self.ipc_msg_dict = {}  # key: ticker ID or request ID; value: request and response objects; response objects ususally carrys data, Events, and Status
         self.order_id = 0  # current available order ID
-        self.order_dict = {}  # key: ticker ID or request ID; value: request and response objects; response objects ususally carrys data, Events, and Status
+        self.order_history = {}  # key: ticker ID or request ID; value: request and response objects; response objects ususally carrys data, Events, and Status
+
+        # dict to store market depth data; key: (client_id, request_id)
+        self.market_depth_buffer = dict()
 
         self.context = None  # key: ticker ID or request ID; value: request and response objects; response objects ususally carrys data, Events, and Status
+        self.portfolio = None
+        self.account = None
 
         self.wrapper = IBMsgWrapper(self)  # the instance with IB message callback methods
         self.connection = EClientSocket(self.wrapper)  # low layer socket client
@@ -75,13 +86,21 @@ class IBClient(object):
         self.order_event = Event()
         self.account_event = Event()
         self.get_order_event = Event()
+        self.tick_snapshot_req_end = Event()
 
         # LOCKER
         self.req_id_locker = threading.Lock()
 
+        # Order ID cond
+        self.order_id_cond = threading.Condition()
+
         # CONSTANT VALUES
         self.PRICE_DF_HEADER1 = ['time', 'open', 'high', 'low', 'close', 'volume']
         self.PRICE_DF_HEADER2 = ['symbol', 'time', 'open', 'high', 'low', 'close', 'volume']
+
+    @property
+    def connected(self):
+        return self.connection.m_connected
 
     def connect(self):
         """ Connect to socket host, e.g. TWS """
@@ -95,9 +114,6 @@ class IBClient(object):
 
         if self.connected:
             self.order_id = self.connection.reqIds(-1)
-            if self.context is not None:
-                # TODO: may need to move this to a thread or at user layer
-                self.enable_account_info_update()
         else:
             print('failed to connect.')
 
@@ -109,24 +125,23 @@ class IBClient(object):
 
     def disconnect(self):
         """ disconnect from IB host """
-        if self.context is not None:
-            self.disable_account_info_update()
-
+        # self.disable_account_info_update()
         self.connection.eDisconnect()
-        self.connected = False
-
-    def register_strategy(self, context, data):
-        """  TBA """
-        self.context = context
-
 
     def __get_new_request_id(self):
-        '''' genew request ID (ticker ID) in a thread safe way '''
+        '''' generate a new request ID (ticker ID) in a thread safe way '''
         self.req_id_locker.acquire()
         self.tickerId += 1
         __id = self.tickerId
         self.req_id_locker.release()
         return __id
+
+    def setup_account(self, account_id, starting_cash):
+        self.portfolio = Portfolio(account_id, starting_cash)
+        self.account = self.portfolio.account
+        if self.connected:
+            # TODO: may need to move this to a thread or at user layer
+            self.enable_account_info_update()
 
     #
     # Tick Data Methods
@@ -360,6 +375,8 @@ class IBClient(object):
         if response.event.is_set():
             df = pd.DataFrame(response.price_hist, columns=self.PRICE_DF_HEADER1)
             # clean up the time format
+            print(df.head(10))
+            print(response.price_hist)
             date = df['time'][0]
 
             if len(date) == 8:
@@ -491,6 +508,42 @@ class IBClient(object):
     #
     # Placing/Changing/Canceling Order Methods
     #
+
+    def request_order_id(self):
+        """ request order id from TWS client """
+
+        # request next valid order ID from IB host; this request will update self.order_id
+        # details: https: // interactivebrokers.github.io / tws - api / order_submission.html
+        self.connection.reqIds(-1)
+
+        self.order_id_cond.acquire()
+        self.order_id_cond.wait()
+        new_order_id = self.order_id
+        self.order_id_cond.release()
+
+        return new_order_id
+
+    def get_order_status(self, order_id):
+        """
+        orderStatus 1 PreSubmitted 0 1000 0.0 1216371623 0 0.0 8615 None
+        {'contract': <ib.ext.Contract.Contract object at 0x10ebb7cf8>,
+        'order': <ib.ext.Order.Order object at 0x10ebb7668>,
+        'status': 'PreSubmitted', 'filled': False, 'permId': 1216371623,
+        'remaining': 1000, 'avgFillPrice': 0.0, 'lastFillPrice': 0.0, 'whyHeld': None}
+
+        :param order_id:
+        :return:
+        """
+
+        key = (self.client_id, order_id)
+
+        order_info = self.order_history.get(key, None)
+
+        if order_info:
+            return order_info['status']
+        else:
+            return ""
+
     def order_amount(self, contract, amount, style=MarketOrder()):
         ''' Place an order. Order X units of security Y.
             Warning: only mkt order and limited order work; calling stoploss/stoplimited order will result in IB disconnection.
@@ -511,12 +564,15 @@ class IBClient(object):
 
         if not isinstance(contract, Contract):
             raise TypeError("contract must be a contract object")
-        # request next valid order ID from IB host; this request will update self.order_id
-        self.connection.reqIds(-1)  # note: input param is always ignored;
-        sleep(0.05)
 
         order = Order()
-        order.m_orderId = self.order_id
+
+        # request next valid order ID from IB host; this request will update self.order_id
+        # details: https: // interactivebrokers.github.io / tws - api / order_submission.html
+        # self.connection.reqIds(-1)
+        # sleep(0.05)
+        order.m_orderId = self.request_order_id()
+
         order.m_client_id = self.client_id
         order.m_action = action
         order.m_totalQuantity = abs(amount)
@@ -528,9 +584,12 @@ class IBClient(object):
         order.m_overridePercentageConstraints = True  # override TWS order size constraints
 
         # place order
-        self.connection.placeOrder(self.order_id, contract, order)
+        self.connection.placeOrder(order.m_orderId, contract, order)
+
+        # self.order_history[(self.order_id, self.client_id)] = order
+
         # TODO: wait for returns from orderStatus
-        return self.order_id
+        return order.m_orderId
 
     def combo_order_amount(self, contract, amount, style=MarketOrder()):
         ''' Place an order
@@ -718,7 +777,7 @@ class IBClient(object):
 
         # TODO: check self.IB_acct_id before using it
         # request IB host (e.g. TWS) push account info to IB client (socket client)
-        self.connection.reqAccountUpdates(True, self.context.account.account_id)
+        self.connection.reqAccountUpdates(True, self.account.account_id)
         return
 
     def disable_account_info_update(self):
@@ -730,7 +789,7 @@ class IBClient(object):
 
         # TODO: check self.IB_acct_id before using it
         # stop IB host (e.g. TWS) to push account info to IB client (socket client)
-        self.connection.reqAccountUpdates(False, self.context.account.account_id)
+        self.connection.reqAccountUpdates(False, self.account.account_id)
         return
 
     #
@@ -1095,3 +1154,44 @@ class IBClient(object):
         new_contract = copy(contract_details.m_summary)
 
         return status, new_contract
+
+    def request_market_depth(self, contract, num_rows=10):
+        """
+
+        :param contract:
+        :param num_rows:
+        :return:
+        """
+        if isinstance(contract, Contract):
+            pass
+        elif isinstance(contract, str):
+            contract = new_stock_contract(contract)
+        else:
+            raise TypeError("contract must be a contract object or string (for U.S. stocks only).")
+
+        if not self.connected:
+            raise RuntimeError('IB client is not connected to TWS')
+
+        __id = self.__get_new_request_id()
+        self.market_depth_buffer[__id] = MarketDepth(__id)
+        self.connection.reqMktDepth(__id, contract, num_rows)
+
+        return __id, self.market_depth_buffer[__id]
+
+
+    def cancel_market_depth(self, request_id):
+        """
+
+        :param contract:
+        :param num_rows:
+        :return:
+        """
+        if not self.connected:
+            raise RuntimeError('IB client is not connected to TWS')
+
+        if request_id in self.market_depth_buffer.keys():
+            self.connection.cancelMktDepth(request_id)
+            data = self.market_depth_buffer.pop(request_id)
+            return data
+        else:
+            raise ValueError("request_id is not found: %s" % request_id)

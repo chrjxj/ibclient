@@ -9,11 +9,11 @@ import unittest
 import datetime
 import time
 from pprint import pprint
+import random
 
-from ibclient import *
-from ibclient import IBClient
-from ibclient.orders_style import *
-from ibclient.contract import new_stock_contract, new_futures_contract
+from ibclient import (IBClient,
+                      MarketOrder, LimitOrder,
+                      new_stock_contract, new_futures_contract)
 
 sys.path.insert(0, path.abspath(path.join(path.dirname(__file__), '..')))
 from tests.config import load_config
@@ -21,30 +21,31 @@ from tests.config import load_config
 
 class Test(unittest.TestCase):
 
-    def set_data(self):
+    def setUp(self):
         self.config = load_config('test-acc.yaml')
         pprint(self.config)
+        _stock_config = self.config['stock']
+        self.stock = new_stock_contract(_stock_config['symbol'],
+                                        exchange = _stock_config['exchange'],
+                                        currency=_stock_config['currency'])
 
-        self.stock = new_stock_contract(self.config.get('stock_symbol_01', 'IBM'))
-        self.stock_str = self.config.get('stock_symbol_02', 'DIN')
-
-        self.future = new_futures_contract(self.config['symbol'],
-                                           self.config['exchange'],
+        self.future = new_futures_contract(self.config['future']['symbol'],
+                                           self.config['future']['exchange'],
                                            False,
-                                           expiry=str(self.config['expiry']),
-                                           tradingClass=self.config['tradingClass'])
+                                           expiry=str(self.config['future']['expiry']),
+                                           tradingClass=self.config['future']['tradingClass'])
         self.end = datetime.datetime.now().strftime('%Y%m%d %H:%M:%S')
 
-    def set_conn(self):
         self.con = IBClient(port=self.config['port'],
-                            client_id=self.config['client_id'])
+                            client_id=random.randint(1, 10000))
         self.con.connect()
-        return self.con
+
+    def tearDown(self):
+        self.con.disconnect()
 
     def test01_get_open_orders(self):
         print('%s test_get_open_orders %s' % ('-' * 30, '-' * 30))
-        self.set_data()
-        self.set_conn()
+
         # order MSFT at $10 - this will create a pending order
         id1 = self.con.order_amount(self.stock, 100, style=LimitOrder(10.))
         time.sleep(0.2)
