@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+# coding: utf-8
 import os
 import codecs
 from setuptools import setup, find_packages
@@ -24,6 +26,7 @@ setup(
     long_description=long_desc,
     author='Jin Xu',
     author_email='jin_xu1@qq.com',
+    url='https://github.com/chrjxj/ibclient',
     license='BSD',
     keywords=['Interactive Brokers', 'TWS', 'IB', 'Stock', 'finance'],
     classifiers=[
@@ -35,6 +38,7 @@ setup(
         'Programming Language :: Python :: 2.7',
         'Programming Language :: Python :: 3.5',
         'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: 3.7',
     ],
     packages=find_packages(),
     install_requires=parse_requirements('requirements.txt'),
