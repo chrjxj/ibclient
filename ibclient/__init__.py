@@ -16,33 +16,20 @@ __all__ = [
 import ibclient.account
 import ibclient.utils
 import ibclient.contract
-import ibclient.orders_style
 
 #
 # """
 # for IB client
 # """
 from ibclient.ib_client import (IBClient)
-#
-# """
-# for util functions
-# """
-# from ibclient.utils import *
-#
-# """
-# for contract functions
-# """
-# from ibclient.contract import *
 
-#from ibclient.orders_style import *
-from ibclient.orders import (MarketOrder,
-                             LimitOrder)
 #
 # """
 # Account definitions
 # """
 from ibclient.account import (Portfolio, Account, Position)
 
+from ibclient.orders import (OrderExecution, MarketOrder, LimitOrder)
 from ibclient.contract import (new_contract, new_stock_contract,
                                new_futures_contract, new_option_contract,
                                )
