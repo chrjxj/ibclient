@@ -111,6 +111,9 @@ from datetime import datetime
 
 class MarketDepth():
     """
+    MarketDepth
+
+    Sample data/message from TWS
             updateMktDepth 1000 0 1 1 24.45 765800
             updateMktDepth 1000 7 1 1 24.1 277000
             updateMktDepth 1000 0 1 0 24.5 368800
