@@ -105,3 +105,68 @@ class IBEXCHANGE(object):
     def get_timezone(exchange):
         return IBEXCHANGE.TIMEZONE.get(exchange, 'US/Eastern')
 
+
+
+from datetime import datetime
+
+class MarketDepth():
+    """
+    MarketDepth
+
+    Sample data/message from TWS
+            updateMktDepth 1000 0 1 1 24.45 765800
+            updateMktDepth 1000 7 1 1 24.1 277000
+            updateMktDepth 1000 0 1 0 24.5 368800
+            updateMktDepth 1000 3 1 0 24.65 176000
+            updateMktDepth 1000 4 1 0 24.7 302200
+            updateMktDepth 1000 0 1 1 24.45 773400
+            updateMktDepth 1000 1 1 1 24.4 1093000
+            updateMktDepth 1000 0 1 0 24.5 365200
+            updateMktDepth 1000 1 1 0 24.55 384400
+            updateMktDepth 1000 3 1 0 24.65 173400
+    """
+
+    def __init__(self, request_id):
+        self.__request_id = request_id
+        self.last_update = datetime.now()
+        self.__bid = [(-1, -1)] * 10
+        self.__ask = [(-1, -1)] * 10
+
+    def update(self, tickerId, position, operation, side, price, size):
+        """
+            see https://interactivebrokers.github.io/tws-api/market_depth.html#receive
+        :param tickerId:
+        :param position:
+        :param operation: insert (0), update (1) or remove (2)
+        :param side:
+        :param price:
+        :param size:
+        :return:
+        """
+        assert tickerId == self.__request_id, "Invalid tickerId."
+        assert position < 10, "Invalid position value."
+
+        if side == 0:
+            # ask side
+            self.__ask[position] = (price, size)
+        elif side == 1:
+            self.__bid[position] = (price, size)
+        else:
+            raise ValueError
+
+        self.last_update = datetime.now()
+
+
+    def __str__(self):
+        lines = ["\t\task\t\t\tbid"]
+        for pos in range(10):
+            lines.append("{}\t{}\t\t\t{}".format(pos, self.__ask[pos], self.__bid[pos]))
+
+        return "\n".join(lines)
+
+    def __repr__(self):
+        lines = ["\t\task\t\t\tbid"]
+        for pos in range(10):
+            lines.append("{}\t{}\t\t\t{}".format(pos, self.__ask[pos], self.__bid[pos]))
+
+        return "\n".join(lines)

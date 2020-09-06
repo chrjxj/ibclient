@@ -23,5 +23,9 @@ local/
 files.txt
 *.rar
 
-tests/test-acc-jin.yaml
+# Helper Files #
+######################
 demo/
+reinstall.sh
+*.yaml
+.pypirc

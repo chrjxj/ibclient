@@ -19,6 +19,8 @@ from ib.ext.EClientErrors import EClientErrors
 from .utils import (RequestDetails,ResponseDetails,CodeMsgPair, IBSystemErrors)
 from .account import (Account, Position, Portfolio)
 from .constants import *
+from .orders import OrderExecution
+
 
 class IBMsgWrapper(EWrapper):
     """ This class define IB socket callback methods, determining the way handling these messages"""
@@ -79,21 +81,26 @@ class IBMsgWrapper(EWrapper):
     #
     def orderStatus(self, orderId, status, filled, remaining, avgFillPrice, permId, parentId, lastFillPrice, clientId, whyHeld):
         """ generated source for method orderStatus """
-        # print('orderStatus', orderId, status, filled, remaining, avgFillPrice, permId, parentId, lastFillPrice, clientId, whyHeld
+        #print('orderStatus', orderId, status, filled, remaining, avgFillPrice, permId, parentId, lastFillPrice, clientId, whyHeld)
         if clientId != self.ib_client.client_id:
             return
         key = (clientId, orderId)
 
-        if key not in self.ib_client.order_dict:
-            self.ib_client.order_dict[key] = {}
-
-        self.ib_client.order_dict[key]['status'] = status
-        self.ib_client.order_dict[key]['filled'] = bool(filled)
-        self.ib_client.order_dict[key]['permId'] = int(permId)
-        self.ib_client.order_dict[key]['remaining'] = int(remaining)
-        self.ib_client.order_dict[key]['avgFillPrice'] = float(avgFillPrice)
-        self.ib_client.order_dict[key]['lastFillPrice'] = float(lastFillPrice)
-        self.ib_client.order_dict[key]['whyHeld'] = whyHeld
+        if key not in self.ib_client.order_history:
+            self.ib_client.order_history[key] = {}
+            self.ib_client.order_history[key]['order_exec_obj'] = OrderExecution(orderId, status, filled, remaining,
+                                                                          avgFillPrice, permId, parentId, lastFillPrice,
+                                                                          clientId, whyHeld)
+        elif 'status_obj' not in self.ib_client.order_history[key]:
+            self.ib_client.order_history[key]['order_exec_obj'] = OrderExecution(orderId, status, filled, remaining,
+                                                                          avgFillPrice, permId, parentId, lastFillPrice,
+                                                                          clientId, whyHeld)
+        else:
+            _order_exec = self.ib_client.order_history[key]['order_exec_obj']
+            _order_exec.update(orderId, status, filled, remaining,
+                           avgFillPrice, permId, parentId, lastFillPrice,
+                           clientId, whyHeld)
+        #print(self.ib_client.order_history[key])
 
     def openOrder(self, orderId, contract, order, orderState):
         """ generated source for method openOrder """
@@ -102,12 +109,12 @@ class IBMsgWrapper(EWrapper):
             return
 
         key = (clientId, orderId)
-        if key not in self.ib_client.order_dict:
-            self.ib_client.order_dict[key] = {}
+        if key not in self.ib_client.order_history:
+            self.ib_client.order_history[key] = {}
 
-        self.ib_client.order_dict[key]['contract'] = copy(contract)
-        self.ib_client.order_dict[key]['order'] = copy(order)
-        self.ib_client.order_dict[key]['status'] = orderState.m_status
+        self.ib_client.order_history[key]['contract_obj'] = contract
+        self.ib_client.order_history[key]['order_obj'] = order
+        self.ib_client.order_history[key]['status_obj'] = orderState
 
     def openOrderEnd(self):
         """ generated source for method openOrderEnd """
@@ -115,7 +122,12 @@ class IBMsgWrapper(EWrapper):
 
     def nextValidId(self, orderId):
         """ Get nextValid Order Id from IB host and update the order ID to the IB client instance"""
+        self.ib_client.order_id_cond.acquire()
+        # print("nextValidId: {}".format(orderId))
+
         self.ib_client.order_id = orderId
+        self.ib_client.order_id_cond.notify()
+        self.ib_client.order_id_cond.release()
 
     #
     # Fundamental Data Handler
@@ -155,7 +167,7 @@ class IBMsgWrapper(EWrapper):
 
     def tickSize(self, tickerId, field, size):
         """ generated source for method tickSize """
-        # print('tickSize', tickerId, field, size
+        #print('tickSize', tickerId, field, size)
 
         if field not in TICK_FIELDS:
             return
@@ -245,12 +257,8 @@ class IBMsgWrapper(EWrapper):
 
         error_ls = [430, 200]
 
-        IB_FARM_DISPLAY_LS = ['secdefhk', 'hkhmds', 'usfarm.us',  'hfrarm', 'usfuture', 'usfuture.us',
-                              'usfarm', 'ushmds', 'mcgw1.ibllc.com.cn']
-
         if errorCode in info_ls:
             # connection OK or Inactive list
-            self.ib_client.connected = True
             # TODO: decode 'farm' name from this error msg
             for farm in IB_FARM_NAME_LS:
                 if farm in errorMsg:
@@ -259,7 +267,7 @@ class IBMsgWrapper(EWrapper):
                     elif 'is broken' in errorMsg:
                         self.ib_client.hmdf_status_dict[farm] = 'BROKEN'
 
-                    if farm in IB_FARM_DISPLAY_LS:
+                    if farm in IB_FARM_NAME_LS:
                         print('[TWS INFO] ', errorMsg)
             if errorCode == 202:
                 print('[TWS INFO] ', errorMsg)
@@ -272,10 +280,6 @@ class IBMsgWrapper(EWrapper):
             pass
         else:
             print('error:', id, errorCode, errorMsg)
-            # TODO: decode 'farm' name from this error msg
-            for farm in IB_FARM_NAME_LS:
-                if farm in errorMsg and farm in IB_FARM_DISPLAY_LS:
-                        print('[TWS INFO] ', errorMsg)
 
         # clear events
         if IBSystemErrors.TWS_MKT_DATA_OK.m_errorCode == errorCode or IBSystemErrors.TWS_MKT_DATA_INACTIVE == errorCode:
@@ -308,7 +312,7 @@ class IBMsgWrapper(EWrapper):
         if errorCode == EClientErrors.CONNECT_FAIL.m_errorCode or errorCode == EClientErrors.UPDATE_TWS.m_errorCode or \
                         errorCode == IBSystemErrors.TWS_SOCKET_DROP.m_errorCode or \
                         errorCode == IBSystemErrors.TWS_CONN_LOST.m_errorCode:
-            self.ib_client.connected = False
+
             self.ib_client.conn_down_event.set()
             for farm in IB_FARM_NAME_LS:
                 if farm in errorMsg:
@@ -344,7 +348,7 @@ class IBMsgWrapper(EWrapper):
 
     def connectionClosed(self):
         print('connectionClosed: TWS closes the sockets connection or TWS is shutting down.')
-        self.ib_client.connected = False
+
         self.ib_client.conn_down_event.set()
 
     #
@@ -353,7 +357,7 @@ class IBMsgWrapper(EWrapper):
     def updateAccountValue(self, key, value, currency, accountName):
         """ generated source for method updateAccountValue """
         if key in Account.KEYS:
-            self.ib_client.context.account.update(key, value, currency, accountName)
+            self.ib_client.account.update(key, value, currency, accountName)
 
     def updatePortfolio(self, contract, position, marketPrice, marketValue, averageCost, unrealizedPNL, realizedPNL, accountName):
         """ generated source for method updatePortfolio """
@@ -368,49 +372,49 @@ class IBMsgWrapper(EWrapper):
             <ib.ext.Contract.Contract object at 0x10f053470> 310000 6.76399995 2096839.98 6.78236975 -5694.64 0.0 DU264039
         '''
 
-        if contract and int(position) != 0 and float(marketValue) != float(0):
-            symbol = self.ib_client.context.get_symbol_by_conid(int(contract.m_conId))
-            if symbol is None:
-                #
-                # NOTE: it could be the case that the account has positions manually ordered not in strategy's asset universe
-                #
-                #raise ValueError("contract ID {} not found in the context lookup table. Please check the database file during the init.".format(contract.m_conId))
-                print("contract ID {} not found in the context lookup table. Please check the database file during the init.".format(
-                    int(contract.m_conId)))
-            else:
-                #self.ib_client.context.portfolio.update(symbol, contract, position, marketPrice, marketValue, averageCost, unrealizedPNL, realizedPNL, accountName)
-                self.ib_client.context.portfolio.update_positions(symbol, contract, position, marketPrice,
-                                                                  marketValue, averageCost, unrealizedPNL, realizedPNL, accountName)
-
+        # if contract and int(position) != 0 and float(marketValue) != float(0):
+        #     symbol = self.ib_client.context.get_symbol_by_conid(int(contract.m_conId))
+        #     if symbol is None:
+        #         #
+        #         # NOTE: it could be the case that the account has positions manually ordered not in strategy's asset universe
+        #         #
+        #         #raise ValueError("contract ID {} not found in the context lookup table. Please check the database file during the init.".format(contract.m_conId))
+        #         print("contract ID {} not found in the context lookup table. Please check the database file during the init.".format(
+        #             int(contract.m_conId)))
+        #     else:
+        #         #self.ib_client.context.portfolio.update(symbol, contract, position, marketPrice, marketValue, averageCost, unrealizedPNL, realizedPNL, accountName)
+        #         self.ib_client.portfolio.update_positions(symbol, contract, position, marketPrice,
+        #                                                           marketValue, averageCost, unrealizedPNL, realizedPNL, accountName)
+        raise NotImplementedError
 
     def updateAccountTime(self, timeStamp):
         """ generated source for method updateAccountTime """
         #print('updateAccountTime', timeStamp, type(timeStamp)
-        pass
+        raise NotImplementedError
 
     def accountDownloadEnd(self, accountName):
         """ generated source for method accountDownloadEnd """
-        pass
+        raise NotImplementedError
 
     def position(self, account, contract, pos, avgCost):
         """ generated source for method position """
         #print('postion', account, contract, pos, avgCost
-        pass
+        raise NotImplementedError
 
     def positionEnd(self):
         """ generated source for method positionEnd """
         #print('positionEnd'
-        pass
+        raise NotImplementedError
 
     def accountSummary(self, reqId, account, tag, value, currency):
         """ generated source for method accountSummary """
         #print('accountSummary', reqId, account, tag, value, currency
-        pass
+        raise NotImplementedError
 
     def accountSummaryEnd(self, reqId):
         """ generated source for method accountSummaryEnd """
         #print('accountSummaryEnd', reqId
-        pass
+        raise NotImplementedError
 
     #
     # Get Contract Info
@@ -459,12 +463,47 @@ class IBMsgWrapper(EWrapper):
         pass
 
     def updateMktDepth(self, tickerId, position, operation, side, price, size):
-        """ generated source for method updateMktDepth """
-        pass
+        """ generated source for method updateMktDepth
+
+            updateMktDepth 1000 0 1 1 24.45 765800
+            updateMktDepth 1000 7 1 1 24.1 277000
+            updateMktDepth 1000 0 1 0 24.5 368800
+            updateMktDepth 1000 3 1 0 24.65 176000
+            updateMktDepth 1000 4 1 0 24.7 302200
+            updateMktDepth 1001 0 1 1 24.45 765800
+            updateMktDepth 1001 0 1 0 24.5 368800
+            updateMktDepth 1001 3 1 0 24.65 176000
+            updateMktDepth 1001 4 1 0 24.7 302200
+            updateMktDepth 1000 0 1 1 24.45 773400
+            updateMktDepth 1000 1 1 1 24.4 1093000
+            updateMktDepth 1000 0 1 0 24.5 365200
+            updateMktDepth 1000 1 1 0 24.55 384400
+            updateMktDepth 1000 3 1 0 24.65 173400
+            updateMktDepth 1001 0 1 1 24.45 773400
+            updateMktDepth 1001 1 1 1 24.4 1093000
+            updateMktDepth 1001 0 1 0 24.5 365200
+        """
+
+        print("updateMktDepth", tickerId, position, operation, side, price, size)
+
+        data = self.ib_client.market_depth_buffer.get(tickerId, None)
+
+        if data:
+            data.update(tickerId, position, operation, side, price, size)
+        else:
+            print("Incorrect request ID: {}".format(tickerId))
+
 
     def updateMktDepthL2(self, tickerId, position, marketMaker, operation, side, price, size):
         """ generated source for method updateMktDepthL2 """
-        pass
+        print("updateMktDepthL2", tickerId, position, marketMaker, operation, side, price, size)
+
+        data = self.ib_client.market_depth_buffer.get(tickerId, None)
+
+        if data:
+            data.update(tickerId, position, operation, side, price, size)
+        else:
+            print("Incorrect request ID: {}".format(tickerId))
 
     def updateNewsBulletin(self, msgId, msgType, message, origExchange):
         """ generated source for method updateNewsBulletin """
